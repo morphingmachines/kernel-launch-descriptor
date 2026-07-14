@@ -134,23 +134,8 @@ class KernelLaunch:
     grid: (n_x, n_y, n_ces): CR grid dimensions and CEs per CR.
     args: list of ScalarArg, BufferArg, or SharedBufferView, in declaration order.
 
-    Segment ID assignment is handled by TestDriver internally: each kernel gets
-    a fresh sequential assignment starting from 0. The private buffer pool (if
-    any BufferArgs) and each unique SharedBuffer each occupy one segment ID.
-    Logical addresses are derived from the assigned segment and placed in args[].
-
-    Memory layout written by TestDriver before SW interrupt:
-
-        global_rts_memory (logical 0x14000000):
-          [+0x00]             __kernel_exec_cmd
-                                .args      = 0x14000000 + sizeof(__kernel_exec_cmd)
-                                .args_size = len(args) * 4
-          [+sizeof(cmd)]      args[0]  <- scalar value or logical addr (uint32)
-          ...
-
-        global data segment (seg_id assigned by TestDriver):
-          private BufferArgs: bump-allocated within one segment
-          each SharedBuffer:  one segment, same physical backing across all kernels
+    Buffer addresses and memory layout are assigned by the host driver consuming
+    this descriptor; they are not part of the descriptor itself.
     """
     elf:  str
     grid: tuple   # (n_x, n_y, n_ces)
