@@ -130,7 +130,7 @@ class KernelLaunch:
             ]),
         ]
 
-    elf:  path to kernel ELF, relative to ../mm-baremetal-examples/.
+    elf:  absolute path to kernel ELF.
     grid: (n_x, n_y, n_ces): CR grid dimensions and CEs per CR.
     args: list of ScalarArg, BufferArg, or SharedBufferView, in declaration order.
 

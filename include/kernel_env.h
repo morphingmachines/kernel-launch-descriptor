@@ -32,7 +32,7 @@ struct Arg_shared_buffer {
 using Kernel_arg = std::variant<Arg_scalar, Arg_buffer, Arg_shared_buffer>;
 
 struct Kernel_desc {
-    std::string             elf;   // path relative to mm-baremetal-examples/
+    std::string             elf;   // absolute path to kernel ELF
     uint32_t                n_x;
     uint32_t                n_y;
     uint32_t                n_ces;

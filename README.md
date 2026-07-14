@@ -28,13 +28,17 @@ See [example_launch.py](example_launch.py) for a complete working example.
 ## Writing a launch.py
 
 ```python
+from pathlib import Path
 from kernel_launch import KernelLaunch, SharedBuffer, scalar, buffer, IN, OUT
+
+# Absolute path to the mm-baremetal-examples directory.
+MM_EXAMPLES = Path("/path/to/mm-baremetal-examples")
 
 result = SharedBuffer(256)
 
 LAUNCHES = [
     KernelLaunch(
-        elf="1CR/Producer/Producer.elf",
+        elf=str(MM_EXAMPLES / "1CR/Producer/Producer.elf"),
         grid=(1, 1, 4),
         args=[
             scalar("i32", 10),
@@ -42,7 +46,7 @@ LAUNCHES = [
         ]
     ),
     KernelLaunch(
-        elf="1CR/Consumer/Consumer.elf",
+        elf=str(MM_EXAMPLES / "1CR/Consumer/Consumer.elf"),
         grid=(2, 1, 4),
         args=[
             result.as_input(),
@@ -60,7 +64,7 @@ LAUNCHES = [
 
 | Field  | Type                                           | Description                              |
 |--------|------------------------------------------------|------------------------------------------|
-| `elf`  | `str`                                          | Kernel ELF path                          |
+| `elf`  | `str`                                          | Absolute path to kernel ELF              |
 | `grid` | `(n_x, n_y, n_ces)`                           | CR grid dimensions and CEs per CR        |
 | `args` | `list[ScalarArg\|BufferArg\|SharedBufferView]` | Kernel arguments, in declaration order   |
 
@@ -129,7 +133,7 @@ Output of `gen_launches_json.py` / `save_launches`. Input to `parse_launches`.
 {
   "kernels": [
     {
-      "elf":  "1CR/Producer/Producer.elf",
+      "elf":  "/abs/path/to/mm-baremetal-examples/1CR/Producer/Producer.elf",
       "grid": [1, 1, 4],
       "args": [
         {"kind": "scalar", "type": "i32", "value": 10},
@@ -137,7 +141,7 @@ Output of `gen_launches_json.py` / `save_launches`. Input to `parse_launches`.
       ]
     },
     {
-      "elf":  "1CR/Consumer/Consumer.elf",
+      "elf":  "/abs/path/to/mm-baremetal-examples/1CR/Consumer/Consumer.elf",
       "grid": [2, 1, 4],
       "args": [
         {"kind": "shared_buffer", "shared_id": "sb_0", "size": 256, "dir": "in", "init": null},
