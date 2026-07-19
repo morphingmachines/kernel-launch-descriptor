@@ -7,6 +7,13 @@
 // 4 bytes value + 4 bytes implicit padding per field; 6 fields * 8 = 48 bytes total.
 // TestDriver populates only args (logical address of the args array) and args_size
 // (byte count). All other fields are written as zero.
+//
+// Two-struct split rationale:
+//   kernel_meta: describes WHAT the kernel is (name, arg count,
+//     work_group_func pointer). Set by compiler, constant across all invocations.
+//   ctx: describes HOW this invocation runs (num_groups, local_size,
+//     global_offset, work_dim). Set by runtime per clEnqueueNDRangeKernel call.
+//   Same kernel enqueued N times = 1 kernel_metadata, N contexts.
 struct Kernel_exec_cmd {
     uint32_t kernel_meta; uint32_t pad0;
     uint32_t args;        uint32_t pad1;
