@@ -17,7 +17,7 @@ static uint32_t scalar_pack_u32(const nlohmann::json &a) {
     if (type == "f32") {
         float fv = a.at("value").get<float>();
         uint32_t u;
-        std::memcpy(&u, &fv, 4);
+        std::memcpy(&u, &fv, sizeof(fv));
         return u;
     }
     throw std::runtime_error("Unsupported scalar type: " + type);
