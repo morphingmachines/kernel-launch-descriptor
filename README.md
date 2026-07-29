@@ -39,18 +39,20 @@ result = SharedBuffer(256)
 LAUNCHES = [
     KernelLaunch(
         elf=str(MM_EXAMPLES / "1CR/Producer/Producer.elf"),
+        entry="producerStart",
         grid=(1, 1, 4),
         args=[
-            scalar("i32", 10),
+            scalar("i32", 10, name="n"),
             result.as_output(),
         ]
     ),
     KernelLaunch(
         elf=str(MM_EXAMPLES / "1CR/Consumer/Consumer.elf"),
+        entry="consumerStart",
         grid=(2, 1, 4),
         args=[
             result.as_input(),
-            buffer(128, OUT),
+            buffer(128, OUT, name="out"),
         ]
     ),
 ]
@@ -62,13 +64,16 @@ LAUNCHES = [
 
 ### `KernelLaunch(elf, grid, args)`
 
-| Field  | Type                                           | Description                              |
-|--------|------------------------------------------------|------------------------------------------|
-| `elf`  | `str`                                          | Absolute path to kernel ELF              |
-| `grid` | `(n_x, n_y, n_ces)`                           | CR grid dimensions and CEs per CR        |
-| `args` | `list[ScalarArg\|BufferArg\|SharedBufferView]` | Kernel arguments, in declaration order   |
+| Field   | Type                                           | Description                                              |
+|---------|------------------------------------------------|----------------------------------------------------------|
+| `elf`   | `str`                                          | Absolute path to kernel ELF                              |
+| `entry` | `str`                                          | Kernel entry function name (e.g. `"producerStart"`)      |
+| `grid`  | `(n_x, n_y, n_ces)`                           | CR grid dimensions and CEs per CR                        |
+| `args`  | `list[ScalarArg\|BufferArg\|SharedBufferView]` | Kernel arguments, in declaration order                   |
 
 ### `scalar(type, value)`
+
+`scalar(type, value, name=None)` -- `name` is the kernel param name, used by `gen_redefine_main.py`.
 
 Packed as `uint32` in the args slot. Supported types:
 
@@ -84,15 +89,16 @@ Packed as `uint32` in the args slot. Supported types:
 
 Values narrower than 32 bits are zero-extended to fill the slot.
 
-### `buffer(size, dir, init=None)`
+### `buffer(size, dir, init=None, name=None)`
 
 Private buffer -- one physical allocation per kernel, not shared.
 
-| Parameter | Type     | Description                                      |
-|-----------|----------|--------------------------------------------------|
-| `size`    | `int`    | Bytes; must be 4-byte aligned                    |
-| `dir`     | `BufDir` | `IN`, `OUT`, or `INOUT`                          |
-| `init`    | `bytes`  | Optional -- host writes this before kernel runs  |
+| Parameter | Type     | Description                                                      |
+|-----------|----------|------------------------------------------------------------------|
+| `size`    | `int`    | Bytes; must be 4-byte aligned                                    |
+| `dir`     | `BufDir` | `IN`, `OUT`, or `INOUT`                                          |
+| `init`    | `bytes`  | Optional -- host writes this before kernel runs                  |
+| `name`    | `str`    | Optional -- kernel param name; used by `gen_redefine_main.py`   |
 
 ### `SharedBuffer(size, init=None)`
 
@@ -133,19 +139,21 @@ Output of `gen_launches_json.py` / `save_launches`. Input to `parse_launches`.
 {
   "kernels": [
     {
-      "elf":  "/abs/path/to/mm-baremetal-examples/1CR/Producer/Producer.elf",
-      "grid": [1, 1, 4],
+      "elf":   "/abs/path/to/mm-baremetal-examples/1CR/Producer/Producer.elf",
+      "entry": "producerStart",
+      "grid":  [1, 1, 4],
       "args": [
-        {"kind": "scalar", "type": "i32", "value": 10},
+        {"kind": "scalar", "type": "i32", "value": 10, "name": "n"},
         {"kind": "shared_buffer", "shared_id": "sb_0", "size": 256, "dir": "out", "init": null}
       ]
     },
     {
-      "elf":  "/abs/path/to/mm-baremetal-examples/1CR/Consumer/Consumer.elf",
-      "grid": [2, 1, 4],
+      "elf":   "/abs/path/to/mm-baremetal-examples/1CR/Consumer/Consumer.elf",
+      "entry": "consumerStart",
+      "grid":  [2, 1, 4],
       "args": [
         {"kind": "shared_buffer", "shared_id": "sb_0", "size": 256, "dir": "in", "init": null},
-        {"kind": "buffer", "size": 128, "dir": "out", "init": null}
+        {"kind": "buffer", "size": 128, "dir": "out", "init": null, "name": "out"}
       ]
     }
   ]

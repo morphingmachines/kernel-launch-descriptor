@@ -25,10 +25,24 @@ _PACK_FMT = {
 }
 
 
+# C type used for the local variable in generated redefine_main.c.
+_CTYPE = {
+    "i8":  "int8_t",  "u8":  "uint8_t",
+    "i16": "int16_t", "u16": "uint16_t",
+    "i32": "int32_t", "u32": "uint32_t",
+    "f32": "float",
+}
+
+
 @dataclass
 class ScalarArg:
     type:  str
     value: int
+    name:  Optional[str] = None  # kernel param name; used by gen_redefine_main.py
+
+    @property
+    def ctype(self) -> str:
+        return _CTYPE[self.type]
 
     def pack_u32(self) -> int:
         """Return value bit-cast to uint32 (little-endian, zero-extended).
@@ -46,6 +60,9 @@ class BufferArg:
     size: int                  # bytes; must be 4-byte aligned
     dir:  BufDir
     init: Optional[bytes] = None  # written to backing memory before kernel launch (IN/INOUT)
+    name: Optional[str] = None    # kernel param name; used by gen_redefine_main.py
+                                   # (pointee type is opaque -- generated as void *, like
+                                   # OpenCL clCreateBuffer; only size is known here)
 
 
 class SharedBuffer:
@@ -96,18 +113,19 @@ class SharedBufferView:
     dir:    BufDir
 
 
-def scalar(type_str: str, value) -> ScalarArg:
+def scalar(type_str: str, value, name: Optional[str] = None) -> ScalarArg:
     if type_str not in _PACK_FMT:
         raise ValueError(f"Unsupported scalar type '{type_str}'. Valid: {list(_PACK_FMT)}")
-    return ScalarArg(type=type_str, value=value)
+    return ScalarArg(type=type_str, value=value, name=name)
 
 
-def buffer(size: int, dir: BufDir, init: Optional[bytes] = None) -> BufferArg:
+def buffer(size: int, dir: BufDir, init: Optional[bytes] = None,
+           name: Optional[str] = None) -> BufferArg:
     if size % 4 != 0:
         raise ValueError(f"Buffer size {size} must be 4-byte aligned")
     if init is not None and len(init) > size:
         raise ValueError(f"init length {len(init)} exceeds buffer size {size}")
-    return BufferArg(size=size, dir=dir, init=init)
+    return BufferArg(size=size, dir=dir, init=init, name=name)
 
 
 @dataclass
@@ -120,37 +138,42 @@ class KernelLaunch:
         result = SharedBuffer(256)
 
         LAUNCHES = [
-            KernelLaunch(elf="1CR/A/A.elf", grid=(1, 1, 4), args=[
-                scalar("i32", 10),
+            KernelLaunch(elf="1CR/A/A.elf", entry="aStart", grid=(1, 1, 4), args=[
+                scalar("i32", 10, name="n"),
                 result.as_output(),
             ]),
-            KernelLaunch(elf="1CR/B/B.elf", grid=(2, 1, 4), args=[
+            KernelLaunch(elf="1CR/B/B.elf", entry="bStart", grid=(2, 1, 4), args=[
                 result.as_input(),
-                buffer(128, OUT),
+                buffer(128, OUT, name="out"),
             ]),
         ]
 
-    elf:  absolute path to kernel ELF.
-    grid: (n_x, n_y, n_ces): CR grid dimensions and CEs per CR.
-    args: list of ScalarArg, BufferArg, or SharedBufferView, in declaration order.
+    elf:   absolute path to kernel ELF.
+    entry: kernel entry function name (e.g. "fibStart"); used by gen_redefine_main.py
+           to emit the extern declaration and call in redefine_main.c. Return type is
+           always void, like an OpenCL kernel.
+    grid:  (n_x, n_y, n_ces): CR grid dimensions and CEs per CR.
+    args:  list of ScalarArg, BufferArg, or SharedBufferView, in declaration order.
 
     Buffer addresses and memory layout are assigned by the host driver consuming
     this descriptor; they are not part of the descriptor itself.
     """
-    elf:  str
-    grid: tuple   # (n_x, n_y, n_ces)
-    args: list    # list[ScalarArg | BufferArg | SharedBufferView]
+    elf:   str
+    entry: str
+    grid:  tuple   # (n_x, n_y, n_ces)
+    args:  list    # list[ScalarArg | BufferArg | SharedBufferView]
 
     def to_dict(self) -> dict:
         def _encode(a):
             if isinstance(a, ScalarArg):
-                return {"kind": "scalar", "type": a.type, "value": a.value}
+                return {"kind": "scalar", "type": a.type, "value": a.value, "name": a.name}
             if isinstance(a, BufferArg):
                 return {
                     "kind": "buffer",
                     "size": a.size,
                     "dir":  a.dir.value,
                     "init": list(a.init) if a.init is not None else None,
+                    "name": a.name,
                 }
             if isinstance(a, SharedBufferView):
                 return {
@@ -163,9 +186,10 @@ class KernelLaunch:
             raise TypeError(f"Unknown arg type: {type(a)}")
 
         return {
-            "elf":  self.elf,
-            "grid": list(self.grid),
-            "args": [_encode(a) for a in self.args],
+            "elf":   self.elf,
+            "entry": self.entry,
+            "grid":  list(self.grid),
+            "args":  [_encode(a) for a in self.args],
         }
 
     def to_json(self) -> str:
