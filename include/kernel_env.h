@@ -20,8 +20,8 @@ struct Arg_buffer {
     uint32_t    size;       // bytes; multiple of 4
     Buf_dir     dir;
     std::string init_path;  // absolute path to raw init bytes; empty = no host init.
-                             // Loader mmaps this file and writes it directly to the
-                             // device backing -- see load_kernel_env() in TestDriver.cc.
+                             // The host driver mmaps this file and writes it directly
+                             // to the device backing.
 };
 
 struct Arg_shared_buffer {

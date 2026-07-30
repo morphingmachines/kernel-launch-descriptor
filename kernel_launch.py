@@ -90,18 +90,18 @@ class SharedBuffer:
 
     One physical allocation backs all kernels that reference this object.
     Allocated when the first referencing kernel is processed; freed only after
-    ALL referencing kernels complete (ref-counted in Mmu_segment_manager).
+    ALL referencing kernels complete (ref-counted by the host driver).
 
-    Optional host init: if provided, TestDriver writes it to the physical backing
-    once (at allocation time) before any kernel launches. Useful when the buffer
-    is an input read by multiple kernels.
+    Optional host init: if provided, the host driver writes it to the physical
+    backing once (at allocation time) before any kernel launches. Useful when
+    the buffer is an input read by multiple kernels.
 
     Flat data only: pointer-valued fields cannot be shared (logical address spaces
     are per-kernel; only the physical backing is common).
 
-    TestDriver assigns a segment ID per kernel independently, so the logical
-    address of the shared buffer may differ between kernels. The kernel always
-    receives the correct address through its args[] slot.
+    The host driver assigns each kernel its own address for the shared buffer
+    independently, so that address may differ between kernels. The kernel
+    always receives the correct address through its args[] slot.
     """
 
     _counter = 0
@@ -283,7 +283,7 @@ def _referenced_bin_files(kernels: list) -> set:
 def save_launches(launches: list, path: str) -> None:
     """Serialize a LAUNCHES list to a multi-kernel JSON file.
 
-    Segment ID assignment is deferred to TestDriver. This function only
+    Buffer address assignment is deferred to the host driver. This function only
     serializes the semantic descriptor (elf, grid, arg kinds, shared_ids).
     Buffer init data is written to .bin files under a BUF_INIT_DIRNAME
     sub-directory next to the JSON file; see KernelLaunch.to_dict.

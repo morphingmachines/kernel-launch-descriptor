@@ -7,7 +7,7 @@
 # Purely illustrative -- unlike fib/ and bmm/, these ELF paths don't point
 # at real kernels. gen_launches_json.py / parse_launches / check_launch only
 # need the path string, so this still exercises the full descriptor pipeline;
-# only running it through TestDriver would require real ELFs.
+# only actually running it on a host driver would require real ELFs.
 from pathlib import Path
 from kernel_launch import KernelLaunch, SharedBuffer, scalar, buffer, OUT
 

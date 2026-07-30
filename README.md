@@ -9,7 +9,7 @@ This library fills that gap. A `launch.py` file captures everything the host
 would otherwise express: which kernels to launch, their grid dimensions, scalar
 arguments, private buffer allocations, and shared-buffer dependencies across
 kernels. `gen_launches_json.py` serializes this to a JSON file. The host driver
-(TestDriver) reads the JSON via `parse_launches`, allocates memory, and sets up 
+reads the JSON via `parse_launches`, allocates memory, and sets up 
 each kernel's execution environment before invoking the kernel execution on the 
 simulated device.
 
@@ -167,7 +167,7 @@ loader mmaps the file and writes it straight to the device backing (see
 }
 ```
 
-Segment IDs are not in the JSON -- the host driver assigns them per kernel.
+Buffer addresses are not in the JSON -- the host driver assigns them per kernel.
 
 ## C++ API
 
