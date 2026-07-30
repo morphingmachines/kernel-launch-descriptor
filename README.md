@@ -135,6 +135,13 @@ save_launches(launches, "launches.json")
 
 Output of `gen_launches_json.py` / `save_launches`. Input to `parse_launches`.
 
+Buffer `init` data is written to a sibling `.bin` file under a `buf_init/`
+directory next to the JSON file. `init` holds a path to that file (relative
+to the JSON file's directory), or `null` if there is no host init. The C++
+loader mmaps the file and writes it straight to the device backing (see
+`Arg_buffer::init_path` / `Arg_shared_buffer::init_path` in
+`include/kernel_env.h`). Keep `launches.json` and `buf_init/` together.
+
 ```json
 {
   "kernels": [
@@ -152,7 +159,7 @@ Output of `gen_launches_json.py` / `save_launches`. Input to `parse_launches`.
       "entry": "consumerStart",
       "grid":  [2, 1, 4],
       "args": [
-        {"kind": "shared_buffer", "shared_id": "sb_0", "size": 256, "dir": "in", "init": null},
+        {"kind": "shared_buffer", "shared_id": "sb_0", "size": 256, "dir": "in", "init": "buf_init/sb_0.bin"},
         {"kind": "buffer", "size": 128, "dir": "out", "init": null, "name": "out"}
       ]
     }
@@ -186,3 +193,25 @@ target_link_libraries(MyDriver PRIVATE kernel_launch_descriptor)
 ```
 
 `kernel_launch_descriptor` pulls in `nlohmann_json` automatically.
+
+## Examples
+
+[examples/](examples/) has three `launch.py` descriptors:
+
+| Example                                             | Kernels | Demonstrates                                                        |
+|------------------------------------------------------|---------|-----------------------------------------------------------------------|
+| [examples/fib/launch.py](examples/fib/launch.py)     | 1       | Mirrors `mm-baremetal-examples/1CR/Fib`, points at its real `.elf`   |
+| [examples/bmm/launch.py](examples/bmm/launch.py)     | 1       | Mirrors `.../1CR/BMM`; exercises the buffer `init` path (see JSON format above) |
+| [examples/pipeline/launch.py](examples/pipeline/launch.py) | 3 | Synthetic Producer -> Filter -> Consumer; two `SharedBuffer`s chaining data across kernels (ELFs are illustrative, not real) |
+
+Building generates each `launch.py`'s `launches.json` (+ `buf_init/`) via
+`gen_launches_json.py`, then runs [examples/common/check_launch.cc](examples/common/check_launch.cc)
+against it as a ctest -- parses the JSON with `parse_launches` and confirms
+every buffer's `init` file opens and fits its declared size. No RTL
+simulation involved.
+
+```sh
+cmake -S examples -B examples/build
+cmake --build examples/build
+ctest --test-dir examples/build --output-on-failure
+```

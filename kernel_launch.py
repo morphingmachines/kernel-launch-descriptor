@@ -3,7 +3,20 @@ import json
 import struct
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import Optional
+
+# Sub-directory (next to the launches JSON) holding raw init-data blobs.
+# Buffer init bytes are large relative to scalar JSON fields; embedding them
+# as JSON int arrays bloats the file and forces a slow element-by-element
+# parse into std::vector<uint8_t> on the C++ side. Writing them as sibling
+# .bin files lets the C++ loader mmap and hand the pointer straight to
+# memif.write() -- no intermediate copy.
+BUF_INIT_DIRNAME = "buf_init"
+
+
+def _buf_dir_for(json_path: str) -> Path:
+    return Path(json_path).parent / BUF_INIT_DIRNAME
 
 
 class BufDir(str, Enum):
@@ -55,6 +68,13 @@ class ScalarArg:
         return struct.unpack("<I", raw)[0]
 
 
+def _validate_buffer(label: str, size: int, init: Optional[bytes]) -> None:
+    if size % 4 != 0:
+        raise ValueError(f"{label} size {size} must be 4-byte aligned")
+    if init is not None and len(init) > size:
+        raise ValueError(f"{label} init length {len(init)} exceeds size {size}")
+
+
 @dataclass
 class BufferArg:
     size: int                  # bytes; must be 4-byte aligned
@@ -87,10 +107,7 @@ class SharedBuffer:
     _counter = 0
 
     def __init__(self, size: int, init: Optional[bytes] = None):
-        if size % 4 != 0:
-            raise ValueError(f"SharedBuffer size {size} must be 4-byte aligned")
-        if init is not None and len(init) > size:
-            raise ValueError(f"SharedBuffer init length {len(init)} exceeds size {size}")
+        _validate_buffer("SharedBuffer", size, init)
         self.size = size
         self.init = init
         self._shared_id = f"sb_{SharedBuffer._counter}"
@@ -121,11 +138,53 @@ def scalar(type_str: str, value, name: Optional[str] = None) -> ScalarArg:
 
 def buffer(size: int, dir: BufDir, init: Optional[bytes] = None,
            name: Optional[str] = None) -> BufferArg:
-    if size % 4 != 0:
-        raise ValueError(f"Buffer size {size} must be 4-byte aligned")
-    if init is not None and len(init) > size:
-        raise ValueError(f"init length {len(init)} exceeds buffer size {size}")
+    _validate_buffer("Buffer", size, init)
     return BufferArg(size=size, dir=dir, init=init, name=name)
+
+
+def _bin_path(filename: str) -> str:
+    return f"{BUF_INIT_DIRNAME}/{filename}"
+
+
+def _write_init(buf_dir: Path, data: bytes, filename: str) -> str:
+    buf_dir.mkdir(parents=True, exist_ok=True)
+    (buf_dir / filename).write_bytes(data)
+    return _bin_path(filename)
+
+
+def _encode_scalar(a: ScalarArg) -> dict:
+    return {"kind": "scalar", "type": a.type, "value": a.value, "name": a.name}
+
+
+def _encode_buffer(a: BufferArg, buf_dir: Path, kernel_idx: int, arg_idx: int) -> dict:
+    init_path = None
+    if a.init is not None:
+        init_path = _write_init(buf_dir, a.init, f"k{kernel_idx}_a{arg_idx}.bin")
+    return {
+        "kind": "buffer",
+        "size": a.size,
+        "dir":  a.dir.value,
+        "init": init_path,
+        "name": a.name,
+    }
+
+
+def _encode_shared_buffer_view(a: SharedBufferView, buf_dir: Path, shared_written: set) -> dict:
+    shared_id = a.shared._shared_id
+    init_path = None
+    if a.shared.init is not None:
+        filename = f"{shared_id}.bin"
+        if shared_id not in shared_written:
+            _write_init(buf_dir, a.shared.init, filename)
+            shared_written.add(shared_id)
+        init_path = _bin_path(filename)
+    return {
+        "kind":      "shared_buffer",
+        "shared_id": shared_id,
+        "size":      a.shared.size,
+        "dir":       a.dir.value,
+        "init":      init_path,
+    }
 
 
 @dataclass
@@ -163,41 +222,62 @@ class KernelLaunch:
     grid:  tuple   # (n_x, n_y, n_ces)
     args:  list    # list[ScalarArg | BufferArg | SharedBufferView]
 
-    def to_dict(self) -> dict:
-        def _encode(a):
+    def to_dict(self, buf_dir: Path, kernel_idx: int = 0, shared_written: Optional[set] = None) -> dict:
+        """Encode this launch to a JSON-able dict.
+
+        Any buffer `init` bytes are written out to sibling .bin files under
+        buf_dir rather than inlined as JSON int arrays (see BUF_INIT_DIRNAME).
+        shared_written tracks which SharedBuffer ids already had their .bin
+        written, so a buffer shared across multiple kernels in one
+        save_launches() call is only written once.
+        """
+        if shared_written is None:
+            shared_written = set()
+
+        def _encode(arg_idx: int, a):
             if isinstance(a, ScalarArg):
-                return {"kind": "scalar", "type": a.type, "value": a.value, "name": a.name}
+                return _encode_scalar(a)
             if isinstance(a, BufferArg):
-                return {
-                    "kind": "buffer",
-                    "size": a.size,
-                    "dir":  a.dir.value,
-                    "init": list(a.init) if a.init is not None else None,
-                    "name": a.name,
-                }
+                return _encode_buffer(a, buf_dir, kernel_idx, arg_idx)
             if isinstance(a, SharedBufferView):
-                return {
-                    "kind":      "shared_buffer",
-                    "shared_id": a.shared._shared_id,
-                    "size":      a.shared.size,
-                    "dir":       a.dir.value,
-                    "init":      list(a.shared.init) if a.shared.init is not None else None,
-                }
+                return _encode_shared_buffer_view(a, buf_dir, shared_written)
             raise TypeError(f"Unknown arg type: {type(a)}")
 
         return {
             "elf":   self.elf,
             "entry": self.entry,
             "grid":  list(self.grid),
-            "args":  [_encode(a) for a in self.args],
+            "args":  [_encode(i, a) for i, a in enumerate(self.args)],
         }
 
-    def to_json(self) -> str:
-        return json.dumps({"kernels": [self.to_dict()]}, indent=2)
+    def to_json(self, buf_dir: Path, kernel_idx: int = 0) -> str:
+        return json.dumps({"kernels": [self.to_dict(buf_dir, kernel_idx=kernel_idx)]}, indent=2)
 
-    def save(self, path: str) -> None:
+    def save(self, path: str, kernel_idx: int = 0) -> None:
+        """kernel_idx: distinguishes buf_init/ filenames when saving multiple
+        KernelLaunch objects into the same directory (default 0 is fine for
+        a single launch per directory; pass distinct values otherwise to
+        avoid buffer-arg .bin filename collisions).
+
+        Note: unlike save_launches(), this does not clear buf_dir first --
+        repeated calls may target the same directory (see kernel_idx above),
+        so a prior call's .bin files must survive. Stale .bin files from
+        args removed between saves are not cleaned up; regenerate into a
+        fresh directory to avoid drift.
+        """
+        buf_dir = _buf_dir_for(path)
         with open(path, "w") as f:
-            f.write(self.to_json())
+            f.write(self.to_json(buf_dir, kernel_idx=kernel_idx))
+
+
+def _referenced_bin_files(kernels: list) -> set:
+    names = set()
+    for k in kernels:
+        for a in k["args"]:
+            init = a.get("init")
+            if init:
+                names.add(Path(init).name)
+    return names
 
 
 def save_launches(launches: list, path: str) -> None:
@@ -205,7 +285,26 @@ def save_launches(launches: list, path: str) -> None:
 
     Segment ID assignment is deferred to TestDriver. This function only
     serializes the semantic descriptor (elf, grid, arg kinds, shared_ids).
+    Buffer init data is written to .bin files under a BUF_INIT_DIRNAME
+    sub-directory next to the JSON file; see KernelLaunch.to_dict.
+
+    buf_dir is pruned only after the new kernels list is fully built, and
+    the JSON is only overwritten after that -- so a failure partway through
+    (bad arg, write error) leaves the previous JSON and its buf_init/ files
+    intact instead of leaving the old JSON pointing at deleted .bin files.
+    Stale .bin files from a previous generation (e.g. a since-removed buffer
+    arg) are removed once the new set is known to be complete.
     """
-    kernels = [launch.to_dict() for launch in launches]
+    buf_dir = _buf_dir_for(path)
+    shared_written = set()
+    kernels = [launch.to_dict(buf_dir, kernel_idx=i, shared_written=shared_written)
+               for i, launch in enumerate(launches)]
+
+    if buf_dir.is_dir():
+        keep = _referenced_bin_files(kernels)
+        for f in buf_dir.iterdir():
+            if f.name not in keep:
+                f.unlink()
+
     with open(path, "w") as f:
         json.dump({"kernels": kernels}, f, indent=2)

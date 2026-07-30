@@ -17,16 +17,19 @@ struct Arg_scalar {
 };
 
 struct Arg_buffer {
-    uint32_t             size;  // bytes; multiple of 4
-    Buf_dir              dir;
-    std::vector<uint8_t> init;  // empty = no host init
+    uint32_t    size;       // bytes; multiple of 4
+    Buf_dir     dir;
+    std::string init_path;  // absolute path to raw init bytes; empty = no host init.
+                             // Loader mmaps this file and writes it directly to the
+                             // device backing -- see load_kernel_env() in TestDriver.cc.
 };
 
 struct Arg_shared_buffer {
-    std::string          shared_id;  // ties same physical buffer across kernels
-    uint32_t             size;       // bytes; multiple of 4
-    Buf_dir              dir;
-    std::vector<uint8_t> init;       // written once at first allocation; empty = no init
+    std::string shared_id;  // ties same physical buffer across kernels
+    uint32_t    size;       // bytes; multiple of 4
+    Buf_dir     dir;
+    std::string init_path;  // written once at first allocation; empty = no init.
+                             // Same mmap-and-write convention as Arg_buffer.init_path.
 };
 
 using Kernel_arg = std::variant<Arg_scalar, Arg_buffer, Arg_shared_buffer>;

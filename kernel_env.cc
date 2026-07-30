@@ -3,6 +3,7 @@
 #include <nlohmann/json.hpp>
 
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -33,6 +34,15 @@ static Buf_dir parse_dir(const std::string &s) {
     throw std::runtime_error("Unknown buffer direction: " + s);
 }
 
+// Init paths in the JSON are relative to the launches JSON's own directory
+// (see BUF_INIT_DIRNAME in kernel_launch.py). Resolve to an absolute path
+// here so downstream loaders don't need to know json_path.
+static std::string resolve_init_path(const nlohmann::json &ja, const std::filesystem::path &json_dir) {
+    if (!ja.contains("init") || ja.at("init").is_null())
+        return "";
+    return (json_dir / ja.at("init").get<std::string>()).string();
+}
+
 Launch_desc parse_launches(const char *json_path) {
     nlohmann::json j;
     {
@@ -41,6 +51,7 @@ Launch_desc parse_launches(const char *json_path) {
             throw std::runtime_error(std::string("Cannot open launches JSON: ") + json_path);
         f >> j;
     }
+    const std::filesystem::path json_dir = std::filesystem::path(json_path).parent_path();
 
     Launch_desc desc;
     for (const auto &jk : j.at("kernels")) {
@@ -63,16 +74,14 @@ Launch_desc parse_launches(const char *json_path) {
                 Arg_buffer ab;
                 ab.size = ja.at("size").get<uint32_t>();
                 ab.dir = parse_dir(ja.at("dir").get<std::string>());
-                if (!ja.at("init").is_null())
-                    ab.init = ja.at("init").get<std::vector<uint8_t>>();
+                ab.init_path = resolve_init_path(ja, json_dir);
                 kd.args.push_back(std::move(ab));
             } else if (kind == "shared_buffer") {
                 Arg_shared_buffer asb;
                 asb.shared_id = ja.at("shared_id").get<std::string>();
                 asb.size = ja.at("size").get<uint32_t>();
                 asb.dir = parse_dir(ja.at("dir").get<std::string>());
-                if (ja.contains("init") && !ja.at("init").is_null())
-                    asb.init = ja.at("init").get<std::vector<uint8_t>>();
+                asb.init_path = resolve_init_path(ja, json_dir);
                 kd.args.push_back(std::move(asb));
             } else {
                 throw std::runtime_error("Unknown arg kind: " + kind);

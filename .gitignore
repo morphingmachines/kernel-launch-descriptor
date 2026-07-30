@@ -1,2 +1,4 @@
 **/__pycache__
 **/launches.json
+**/buf_init/
+examples/build/
