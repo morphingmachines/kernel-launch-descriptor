@@ -93,21 +93,21 @@ Values narrower than 32 bits are zero-extended to fill the slot.
 
 Private buffer -- one physical allocation per kernel, not shared.
 
-| Parameter | Type     | Description                                                      |
-|-----------|----------|------------------------------------------------------------------|
-| `size`    | `int`    | Bytes; must be 4-byte aligned                                    |
-| `dir`     | `BufDir` | `IN`, `OUT`, or `INOUT`                                          |
-| `init`    | `bytes`  | Optional -- host writes this before kernel runs                  |
-| `name`    | `str`    | Optional -- kernel param name; used by `gen_redefine_main.py`   |
+| Parameter | Type           | Description                                                      |
+|-----------|----------------|------------------------------------------------------------------|
+| `size`    | `int`          | Bytes; must be 4-byte aligned                                    |
+| `dir`     | `BufDir`       | `IN`, `OUT`, or `INOUT`                                          |
+| `init`    | `bytes \| Path` | Optional -- host writes this before kernel runs. `bytes`: written to `buf_init/` on save. `Path`: existing file referenced directly; must match `size` exactly. |
+| `name`    | `str`          | Optional -- kernel param name; used by `gen_redefine_main.py`   |
 
 ### `SharedBuffer(size, init=None)`
 
 One physical allocation shared across all kernels that reference it.
 
-| Parameter | Type    | Description                                                     |
-|-----------|---------|-----------------------------------------------------------------|
-| `size`    | `int`   | Bytes; must be 4-byte aligned                                   |
-| `init`    | `bytes` | Optional -- host writes once before any kernel launches         |
+| Parameter | Type           | Description                                                     |
+|-----------|----------------|-----------------------------------------------------------------|
+| `size`    | `int`          | Bytes; must be 4-byte aligned                                   |
+| `init`    | `bytes \| Path` | Optional -- host writes once before any kernel launches. `bytes`: written to `buf_init/` on save. `Path`: existing file referenced directly; must match `size` exactly. |
 
 ```python
 lut = SharedBuffer(1024, init=bytes(range(256)))  # pre-populated read-only input
@@ -135,12 +135,21 @@ save_launches(launches, "launches.json")
 
 Output of `gen_launches_json.py` / `save_launches`. Input to `parse_launches`.
 
-Buffer `init` data is written to a sibling `.bin` file under a `buf_init/`
-directory next to the JSON file. `init` holds a path to that file (relative
-to the JSON file's directory), or `null` if there is no host init. The C++
-loader mmaps the file and writes it straight to the device backing (see
-`Arg_buffer::init_path` / `Arg_shared_buffer::init_path` in
-`include/kernel_env.h`). Keep `launches.json` and `buf_init/` together.
+Buffer `init` data is serialized as a file path string or `null` in the JSON.
+Two sources are supported:
+
+- **`bytes` init**: written to a `buf_init/` sub-directory next to the JSON
+  file as a `.bin` blob. `init` in the JSON holds a relative path
+  (`buf_init/<name>.bin`). `save_launches()` manages this directory --
+  stale blobs from removed args are pruned on each save.
+- **`Path` init**: an existing `.bin` file on the host. `init` in the JSON
+  holds its path string directly. The file is not copied; it must remain
+  accessible at that path when the host driver loads the JSON.
+
+In both cases the C++ loader memory-maps the file and writes it straight to device
+backing (see `Arg_buffer::init_path` / `Arg_shared_buffer::init_path` in
+`include/kernel_env.h`). Keep `launches.json` and any `buf_init/` directory
+together when moving descriptor outputs.
 
 ```json
 {

@@ -7,11 +7,11 @@ from pathlib import Path
 from typing import Optional
 
 # Sub-directory (next to the launches JSON) holding raw init-data blobs.
-# Buffer init bytes are large relative to scalar JSON fields; embedding them
-# as JSON int arrays bloats the file and forces a slow element-by-element
-# parse into std::vector<uint8_t> on the C++ side. Writing them as sibling
-# .bin files lets the C++ loader mmap and hand the pointer straight to
-# memif.write() -- no intermediate copy.
+# When init is provided as bytes, the data is written here as a .bin file
+# and the JSON holds a relative path. The C++ loader memory-maps the file
+# and passes the pointer straight to the device memory interface -- no copy.
+# When init is a Path to an existing file, the JSON holds that path directly;
+# nothing is written to BUF_INIT_DIRNAME.
 BUF_INIT_DIRNAME = "buf_init"
 
 
@@ -68,19 +68,27 @@ class ScalarArg:
         return struct.unpack("<I", raw)[0]
 
 
-def _validate_buffer(label: str, size: int, init: Optional[bytes]) -> None:
+def _validate_buffer(label: str, size: int, init: Optional[bytes | str | Path]) -> None:
     if size % 4 != 0:
         raise ValueError(f"{label} size {size} must be 4-byte aligned")
-    if init is not None and len(init) > size:
-        raise ValueError(f"{label} init length {len(init)} exceeds size {size}")
+    if isinstance(init, (bytes, bytearray)):
+        if len(init) > size:
+            raise ValueError(f"{label} init length {len(init)} exceeds size {size}")
+    elif isinstance(init, (str, Path)):
+        p = Path(init)
+        if not p.exists():
+            raise ValueError(f"{label} init file not found: {init}")
+        file_size = p.stat().st_size
+        if file_size != size:
+            raise ValueError(f"{label} init file size {file_size} does not match buffer size {size}")
 
 
 @dataclass
 class BufferArg:
     size: int                  # bytes; must be 4-byte aligned
     dir:  BufDir
-    init: Optional[bytes] = None  # written to backing memory before kernel launch (IN/INOUT)
-    name: Optional[str] = None    # kernel param name; used by gen_redefine_main.py
+    init: Optional[bytes | str | Path] = None  # written to backing memory before kernel launch (IN/INOUT)
+    name: Optional[str] = None          # kernel param name; used by gen_redefine_main.py
                                    # (pointee type is opaque -- generated as void *, like
                                    # OpenCL clCreateBuffer; only size is known here)
 
@@ -106,7 +114,7 @@ class SharedBuffer:
 
     _counter = 0
 
-    def __init__(self, size: int, init: Optional[bytes] = None):
+    def __init__(self, size: int, init: Optional[bytes | str | Path] = None):
         _validate_buffer("SharedBuffer", size, init)
         self.size = size
         self.init = init
@@ -136,7 +144,7 @@ def scalar(type_str: str, value, name: Optional[str] = None) -> ScalarArg:
     return ScalarArg(type=type_str, value=value, name=name)
 
 
-def buffer(size: int, dir: BufDir, init: Optional[bytes] = None,
+def buffer(size: int, dir: BufDir, init: Optional[bytes | str | Path] = None,
            name: Optional[str] = None) -> BufferArg:
     _validate_buffer("Buffer", size, init)
     return BufferArg(size=size, dir=dir, init=init, name=name)
@@ -158,8 +166,10 @@ def _encode_scalar(a: ScalarArg) -> dict:
 
 def _encode_buffer(a: BufferArg, buf_dir: Path, kernel_idx: int, arg_idx: int) -> dict:
     init_path = None
-    if a.init is not None:
+    if isinstance(a.init, (bytes, bytearray)):
         init_path = _write_init(buf_dir, a.init, f"k{kernel_idx}_a{arg_idx}.bin")
+    elif isinstance(a.init, (str, Path)):
+        init_path = str(a.init)
     return {
         "kind": "buffer",
         "size": a.size,
@@ -172,12 +182,14 @@ def _encode_buffer(a: BufferArg, buf_dir: Path, kernel_idx: int, arg_idx: int) -
 def _encode_shared_buffer_view(a: SharedBufferView, buf_dir: Path, shared_written: set) -> dict:
     shared_id = a.shared._shared_id
     init_path = None
-    if a.shared.init is not None:
+    if isinstance(a.shared.init, (bytes, bytearray)):
         filename = f"{shared_id}.bin"
         if shared_id not in shared_written:
             _write_init(buf_dir, a.shared.init, filename)
             shared_written.add(shared_id)
         init_path = _bin_path(filename)
+    elif isinstance(a.shared.init, (str, Path)):
+        init_path = str(a.shared.init)
     return {
         "kind":      "shared_buffer",
         "shared_id": shared_id,
@@ -225,11 +237,12 @@ class KernelLaunch:
     def to_dict(self, buf_dir: Path, kernel_idx: int = 0, shared_written: Optional[set] = None) -> dict:
         """Encode this launch to a JSON-able dict.
 
-        Any buffer `init` bytes are written out to sibling .bin files under
-        buf_dir rather than inlined as JSON int arrays (see BUF_INIT_DIRNAME).
+        Buffer init handling depends on the init type:
+        - bytes: written as a .bin file under buf_dir; JSON holds the relative path.
+        - str/Path: JSON holds the path string directly; no file is written.
         shared_written tracks which SharedBuffer ids already had their .bin
-        written, so a buffer shared across multiple kernels in one
-        save_launches() call is only written once.
+        written, so a bytes-init shared buffer is written at most once across
+        multiple kernels in one save_launches() call.
         """
         if shared_written is None:
             shared_written = set()
@@ -275,7 +288,7 @@ def _referenced_bin_files(kernels: list) -> set:
     for k in kernels:
         for a in k["args"]:
             init = a.get("init")
-            if init:
+            if init and init.startswith(BUF_INIT_DIRNAME + "/"):
                 names.add(Path(init).name)
     return names
 
@@ -285,8 +298,9 @@ def save_launches(launches: list, path: str) -> None:
 
     Buffer address assignment is deferred to the host driver. This function only
     serializes the semantic descriptor (elf, grid, arg kinds, shared_ids).
-    Buffer init data is written to .bin files under a BUF_INIT_DIRNAME
-    sub-directory next to the JSON file; see KernelLaunch.to_dict.
+    bytes init data is written to .bin files under a BUF_INIT_DIRNAME
+    sub-directory next to the JSON file. str/Path init is referenced directly
+    in the JSON; those files are not copied or managed here.
 
     buf_dir is pruned only after the new kernels list is fully built, and
     the JSON is only overwritten after that -- so a failure partway through
