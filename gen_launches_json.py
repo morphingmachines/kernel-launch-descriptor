@@ -11,7 +11,7 @@ import importlib.util
 import sys
 from pathlib import Path
 
-from kernel_launch import save_launches
+from kernel_launch import BUF_INIT_DIRNAME, save_launches
 
 
 def load_launches(launch_path: Path) -> list:
@@ -36,7 +36,8 @@ def main():
 
     launches = load_launches(launch_path)
     out_path = args.output.resolve() if args.output else launch_path.parent / "launches.json"
-    save_launches(launches, str(out_path))
+    buf_dir = launch_path.parent / BUF_INIT_DIRNAME
+    save_launches(launches, str(out_path), buf_dir=buf_dir)
     print(f"wrote {out_path}")
 
 

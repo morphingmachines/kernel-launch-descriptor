@@ -150,14 +150,10 @@ def buffer(size: int, dir: BufDir, init: Optional[bytes | str | Path] = None,
     return BufferArg(size=size, dir=dir, init=init, name=name)
 
 
-def _bin_path(filename: str) -> str:
-    return f"{BUF_INIT_DIRNAME}/{filename}"
-
-
 def _write_init(buf_dir: Path, data: bytes, filename: str) -> str:
     buf_dir.mkdir(parents=True, exist_ok=True)
     (buf_dir / filename).write_bytes(data)
-    return _bin_path(filename)
+    return str(buf_dir / filename)
 
 
 def _encode_scalar(a: ScalarArg) -> dict:
@@ -187,7 +183,7 @@ def _encode_shared_buffer_view(a: SharedBufferView, buf_dir: Path, shared_writte
         if shared_id not in shared_written:
             _write_init(buf_dir, a.shared.init, filename)
             shared_written.add(shared_id)
-        init_path = _bin_path(filename)
+        init_path = str(buf_dir / filename)
     elif isinstance(a.shared.init, (str, Path)):
         init_path = str(a.shared.init)
     return {
@@ -283,24 +279,30 @@ class KernelLaunch:
             f.write(self.to_json(buf_dir, kernel_idx=kernel_idx))
 
 
-def _referenced_bin_files(kernels: list) -> set:
+def _referenced_bin_files(kernels: list, buf_dir: Path) -> set:
     names = set()
     for k in kernels:
         for a in k["args"]:
             init = a.get("init")
-            if init and init.startswith(BUF_INIT_DIRNAME + "/"):
-                names.add(Path(init).name)
+            if init:
+                p = Path(init)
+                try:
+                    p.relative_to(buf_dir)
+                    names.add(p.name)
+                except ValueError:
+                    pass
     return names
 
 
-def save_launches(launches: list, path: str) -> None:
+def save_launches(launches: list, path: str, buf_dir: Optional[Path] = None) -> None:
     """Serialize a LAUNCHES list to a multi-kernel JSON file.
 
     Buffer address assignment is deferred to the host driver. This function only
     serializes the semantic descriptor (elf, grid, arg kinds, shared_ids).
-    bytes init data is written to .bin files under a BUF_INIT_DIRNAME
-    sub-directory next to the JSON file. str/Path init is referenced directly
-    in the JSON; those files are not copied or managed here.
+    bytes init data is written as .bin files under buf_dir (default: BUF_INIT_DIRNAME
+    sub-directory next to the JSON file). Pass buf_dir explicitly to place the
+    buf_init/ directory elsewhere (e.g. next to launch.py). str/Path init is
+    referenced directly in the JSON; those files are not copied or managed here.
 
     buf_dir is pruned only after the new kernels list is fully built, and
     the JSON is only overwritten after that -- so a failure partway through
@@ -309,13 +311,15 @@ def save_launches(launches: list, path: str) -> None:
     Stale .bin files from a previous generation (e.g. a since-removed buffer
     arg) are removed once the new set is known to be complete.
     """
-    buf_dir = _buf_dir_for(path)
+    if buf_dir is None:
+        buf_dir = _buf_dir_for(path)
+    buf_dir = buf_dir.resolve()
     shared_written = set()
     kernels = [launch.to_dict(buf_dir, kernel_idx=i, shared_written=shared_written)
                for i, launch in enumerate(launches)]
 
     if buf_dir.is_dir():
-        keep = _referenced_bin_files(kernels)
+        keep = _referenced_bin_files(kernels, buf_dir)
         for f in buf_dir.iterdir():
             if f.name not in keep:
                 f.unlink()

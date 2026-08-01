@@ -138,18 +138,21 @@ Output of `gen_launches_json.py` / `save_launches`. Input to `parse_launches`.
 Buffer `init` data is serialized as a file path string or `null` in the JSON.
 Two sources are supported:
 
-- **`bytes` init**: written to a `buf_init/` sub-directory next to the JSON
-  file as a `.bin` blob. `init` in the JSON holds a relative path
-  (`buf_init/<name>.bin`). `save_launches()` manages this directory --
-  stale blobs from removed args are pruned on each save.
+- **`bytes` init**: written to a `buf_init/` sub-directory next to `launch.py`
+  as a `.bin` blob. `init` in the JSON holds the absolute path to that blob.
+  Filename conventions:
+  - Private buffer: `buf_init/k<kernel_index>_a<arg_index>.bin`
+  - Shared buffer: `buf_init/<shared_id>.bin` (e.g. `buf_init/sb_0.bin`)
+
+  `save_launches()` manages this directory -- stale blobs from removed args
+  are pruned on each save.
 - **`Path` init**: an existing `.bin` file on the host. `init` in the JSON
-  holds its path string directly. The file is not copied; it must remain
+  holds that absolute path directly. The file is not copied; it must remain
   accessible at that path when the host driver loads the JSON.
 
 In both cases the C++ loader memory-maps the file and writes it straight to device
 backing (see `Arg_buffer::init_path` / `Arg_shared_buffer::init_path` in
-`include/kernel_env.h`). Keep `launches.json` and any `buf_init/` directory
-together when moving descriptor outputs.
+`include/kernel_env.h`).
 
 ```json
 {
@@ -168,7 +171,7 @@ together when moving descriptor outputs.
       "entry": "consumerStart",
       "grid":  [2, 1, 4],
       "args": [
-        {"kind": "shared_buffer", "shared_id": "sb_0", "size": 256, "dir": "in", "init": "buf_init/sb_0.bin"},
+        {"kind": "shared_buffer", "shared_id": "sb_0", "size": 256, "dir": "in", "init": "/abs/path/to/launch_dir/buf_init/sb_0.bin"},
         {"kind": "buffer", "size": 128, "dir": "out", "init": null, "name": "out"}
       ]
     }
