@@ -15,7 +15,7 @@ from typing import Optional
 BUF_INIT_DIRNAME = "buf_init"
 
 
-def _buf_dir_for(json_path: str) -> Path:
+def _buf_dir_for(json_path: str | Path) -> Path:
     return Path(json_path).parent / BUF_INIT_DIRNAME
 
 
@@ -262,7 +262,7 @@ class KernelLaunch:
     def to_json(self, buf_dir: Path, kernel_idx: int = 0) -> str:
         return json.dumps({"kernels": [self.to_dict(buf_dir, kernel_idx=kernel_idx)]}, indent=2)
 
-    def save(self, path: str, kernel_idx: int = 0) -> None:
+    def save(self, path: str | Path, kernel_idx: int = 0) -> None:
         """kernel_idx: distinguishes buf_init/ filenames when saving multiple
         KernelLaunch objects into the same directory (default 0 is fine for
         a single launch per directory; pass distinct values otherwise to
@@ -294,7 +294,7 @@ def _referenced_bin_files(kernels: list, buf_dir: Path) -> set:
     return names
 
 
-def save_launches(launches: list, path: str, buf_dir: Optional[Path] = None) -> None:
+def save_launches(launches: list, path: str | Path, buf_dir: Optional[Path] = None) -> None:
     """Serialize a LAUNCHES list to a multi-kernel JSON file.
 
     Buffer address assignment is deferred to the host driver. This function only
