@@ -5,8 +5,9 @@
 // Mirrors __kernel_exec_cmd from pocl_device.h (CwithHyperOps/include/pocl/pocl_device.h).
 // ALIGN8(uint field) expands to: uint32_t field __attribute__((aligned(8))), giving
 // 4 bytes value + 4 bytes implicit padding per field; 6 fields * 8 = 48 bytes total.
-// The host driver populates only args (logical address of the args array) and args_size
-// (byte count). All other fields are written as zero.
+// The host driver populates args (logical address of the args array), args_size (byte
+// count), ctx (logical address of the ctx blob), and ctx_size (byte count of the ctx
+// blob). kernel_meta and status are zero at launch time.
 //
 // Two-struct split rationale:
 //   kernel_meta: describes WHAT the kernel is (name, arg count,
