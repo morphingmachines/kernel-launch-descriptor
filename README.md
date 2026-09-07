@@ -208,13 +208,14 @@ target_link_libraries(MyDriver PRIVATE kernel_launch_descriptor)
 
 ## Examples
 
-[examples/](examples/) has three `launch.py` descriptors:
+[examples/](examples/) has four `launch.py` descriptors:
 
 | Example                                             | Kernels | Demonstrates                                                        |
 |------------------------------------------------------|---------|-----------------------------------------------------------------------|
 | [examples/fib/launch.py](examples/fib/launch.py)     | 1       | Mirrors `mm-baremetal-examples/1CR/Fib`, points at its real `.elf`   |
-| [examples/bmm/launch.py](examples/bmm/launch.py)     | 1       | Mirrors `.../1CR/BMM`; exercises the buffer `init` path (see JSON format above) |
+| [examples/bmm/launch.py](examples/bmm/launch.py)     | 1       | Mirrors `.../1CR/BMM`; exercises `bytes` buffer `init` (written to `buf_init/`) |
 | [examples/pipeline/launch.py](examples/pipeline/launch.py) | 3 | Synthetic Producer -> Filter -> Consumer; two `SharedBuffer`s chaining data across kernels (ELFs are illustrative, not real) |
+| [examples/fileinit/launch.py](examples/fileinit/launch.py) | 1 | `Path` buffer `init` from a checked-in `vec_a.bin`, alongside a `bytes` init and an uninitialized output — all three `init` encodings in one JSON (ELF is illustrative, not real) |
 
 Building generates each `launch.py`'s `launches.json` (+ `buf_init/`) via
 `gen_launches_json.py`, then runs [examples/common/check_launch.cc](examples/common/check_launch.cc)

@@ -1,6 +1,6 @@
 # Standalone example project for kernel-launch-descriptor.
 #
-# Each subdirectory (fib/, bmm/) has a launch.py. Building this project
+# Each subdirectory (fib/, bmm/, pipeline/, fileinit/) has a launch.py. Building this project
 # generates that launch.py's launches.json (+ buf_init/ files) via
 # gen_launches_json.py, then registers a ctest that parses the result with
 # check_launch and validates it -- no RTL simulation involved.
@@ -60,3 +60,4 @@ endfunction()
 add_subdirectory(fib)
 add_subdirectory(bmm)
 add_subdirectory(pipeline)
+add_subdirectory(fileinit)
