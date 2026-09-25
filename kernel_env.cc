@@ -34,9 +34,11 @@ static Buf_dir parse_dir(const std::string &s) {
     throw std::runtime_error("Unknown buffer direction: " + s);
 }
 
-// Init paths in the JSON are relative to the launches JSON's own directory
-// (see BUF_INIT_DIRNAME in kernel_launch.py). Resolve to an absolute path
-// here so downstream loaders don't need to know json_path.
+// kernel_launch.py always writes absolute init paths (bytes blobs under the
+// resolved buf_dir; file inits resolved against the declaring launch.py's
+// directory), and std::filesystem's `/` returns an absolute right-hand side
+// unchanged. The json_dir join only matters for hand-written JSON with a
+// relative path, which is taken relative to the JSON's own directory.
 static std::string resolve_init_path(const nlohmann::json &ja, const std::filesystem::path &json_dir) {
     if (!ja.contains("init") || ja.at("init").is_null())
         return "";
