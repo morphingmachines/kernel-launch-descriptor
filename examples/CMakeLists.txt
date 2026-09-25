@@ -40,9 +40,15 @@ enable_testing()
 add_executable(check_launch common/check_launch.cc)
 target_link_libraries(check_launch PRIVATE kernel_launch_descriptor)
 
-# add_launch_example(name): generates <name>/launches.json from <name>/launch.py
-# and registers a ctest that validates it with check_launch.
+# add_launch_example(name [WORKING_DIRECTORY dir] [DEPENDS files...]):
+# generates <name>/launches.json from <name>/launch.py and registers a ctest
+# that validates it with check_launch. WORKING_DIRECTORY sets the generator's
+# cwd (default: the build dir); DEPENDS adds extra inputs such as init files.
 function(add_launch_example name)
+    cmake_parse_arguments(ARG "" "WORKING_DIRECTORY" "DEPENDS" ${ARGN})
+    if(NOT ARG_WORKING_DIRECTORY)
+        set(ARG_WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+    endif()
     set(launch_py "${EXAMPLES_ROOT}/${name}/launch.py")
     set(out_json  "${CMAKE_CURRENT_BINARY_DIR}/launches.json")
     add_custom_command(
@@ -50,7 +56,8 @@ function(add_launch_example name)
         COMMAND ${Python3_EXECUTABLE}
                 "${DESCRIPTOR_ROOT}/gen_launches_json.py"
                 "${launch_py}" -o "${out_json}"
-        DEPENDS "${launch_py}" "${DESCRIPTOR_ROOT}/kernel_launch.py"
+        WORKING_DIRECTORY "${ARG_WORKING_DIRECTORY}"
+        DEPENDS "${launch_py}" "${DESCRIPTOR_ROOT}/kernel_launch.py" ${ARG_DEPENDS}
         COMMENT "Generating ${name}/launches.json"
     )
     add_custom_target(${name}_launches ALL DEPENDS "${out_json}")
@@ -61,3 +68,7 @@ add_subdirectory(fib)
 add_subdirectory(bmm)
 add_subdirectory(pipeline)
 add_subdirectory(fileinit)
+
+# Python-side unit tests for kernel_launch.py (init path resolution, pruning).
+add_test(NAME kernel_launch_py_tests
+         COMMAND ${Python3_EXECUTABLE} -m unittest discover -s "${DESCRIPTOR_ROOT}/tests" -v)

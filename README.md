@@ -97,7 +97,7 @@ Private buffer -- one physical allocation per kernel, not shared.
 |-----------|----------------|------------------------------------------------------------------|
 | `size`    | `int`          | Bytes; must be 4-byte aligned                                    |
 | `dir`     | `BufDir`       | `IN`, `OUT`, or `INOUT`                                          |
-| `init`    | `bytes \| Path` | Optional -- host writes this before kernel runs. `bytes`: written to `buf_init/` on save. `Path`: existing file referenced directly; must match `size` exactly. |
+| `init`    | `bytes \| str \| Path` | Optional -- host writes this before kernel runs. `bytes`: written to `buf_init/` on save. `str`/`Path`: existing file referenced directly; must match `size` exactly. See [File init paths](#file-init-paths). |
 | `name`    | `str`          | Optional -- kernel param name; used by `gen_redefine_main.py`   |
 
 ### `SharedBuffer(size, init=None)`
@@ -107,12 +107,34 @@ One physical allocation shared across all kernels that reference it.
 | Parameter | Type           | Description                                                     |
 |-----------|----------------|-----------------------------------------------------------------|
 | `size`    | `int`          | Bytes; must be 4-byte aligned                                   |
-| `init`    | `bytes \| Path` | Optional -- host writes once before any kernel launches. `bytes`: written to `buf_init/` on save. `Path`: existing file referenced directly; must match `size` exactly. |
+| `init`    | `bytes \| str \| Path` | Optional -- host writes once before any kernel launches. `bytes`: written to `buf_init/` on save. `str`/`Path`: existing file referenced directly; must match `size` exactly. See [File init paths](#file-init-paths). |
 
 ```python
 lut = SharedBuffer(1024, init=bytes(range(256)))  # pre-populated read-only input
 buf = SharedBuffer(256)                            # kernel writes first
 ```
+
+### File init paths
+
+A relative `str`/`Path` `init` is resolved against the **directory of the
+`launch.py` that declares it**. It is not resolved against the process cwd or
+the directory the launches JSON is written to. Resolution and validation
+(file exists, size == buffer `size`) happen right away inside
+`buffer()`/`SharedBuffer()`, so a bad path raises `ValueError` at the offending
+line, and the message names the resolved absolute path. The JSON always holds
+that absolute path.
+
+```python
+buffer(64, IN, init="p.bin")            # -> <launch.py dir>/p.bin
+buffer(64, IN, init="data/p.bin")       # -> <launch.py dir>/data/p.bin
+buffer(64, IN, init="/abs/p.bin")       # absolute: used as-is
+```
+
+Strictly, "the declaring file" is the source file of the code that called
+`buffer()`/`SharedBuffer()`. If a helper module in another directory builds
+buffers for `launch.py`, its relative paths resolve against the helper's
+directory. Code with no source file (REPL, `exec` of a string) resolves
+against the cwd. See [examples/fileinit/](examples/fileinit/).
 
 Produce a `SharedBufferView` for an arg slot:
 
@@ -145,10 +167,19 @@ Two sources are supported:
   - Shared buffer: `buf_init/<shared_id>.bin` (e.g. `buf_init/sb_0.bin`)
 
   `save_launches()` manages this directory -- stale blobs from removed args
-  are pruned on each save.
-- **`Path` init**: an existing `.bin` file on the host. `init` in the JSON
-  holds that absolute path directly. The file is not copied; it must remain
-  accessible at that path when the host driver loads the JSON.
+  are pruned on each save. Files referenced by a `str`/`Path` init are never
+  pruned, even if they sit inside `buf_init/`, and subdirectories are left
+  alone. A save that would write a `bytes` blob over a user-provided init
+  file of the same name raises `ValueError`.
+- **`str`/`Path` init**: an existing `.bin` file on the host. `init` in the JSON
+  holds its absolute path (relative paths are resolved against the declaring
+  `launch.py`'s directory -- see [File init paths](#file-init-paths)). The file
+  is not copied; it must remain accessible at that path when the host driver
+  loads the JSON.
+
+So every `init` in generated JSON is absolute, and the JSON can live in any
+directory. `parse_launches` still joins a relative `init` (hand-written JSON
+only) onto the JSON's own directory.
 
 In both cases the C++ loader memory-maps the file and writes it straight to device
 backing (see `Arg_buffer::init_path` / `Arg_shared_buffer::init_path` in
@@ -215,12 +246,14 @@ target_link_libraries(MyDriver PRIVATE kernel_launch_descriptor)
 | [examples/fib/launch.py](examples/fib/launch.py)     | 1       | Mirrors `mm-baremetal-examples/1CR/Fib`, points at its real `.elf`   |
 | [examples/bmm/launch.py](examples/bmm/launch.py)     | 1       | Mirrors `.../1CR/BMM`; exercises `bytes` buffer `init` (written to `buf_init/`) |
 | [examples/pipeline/launch.py](examples/pipeline/launch.py) | 3 | Synthetic Producer -> Filter -> Consumer; two `SharedBuffer`s chaining data across kernels (ELFs are illustrative, not real) |
-| [examples/fileinit/launch.py](examples/fileinit/launch.py) | 1 | `Path` buffer `init` from a checked-in `vec_a.bin`, alongside a `bytes` init and an uninitialized output — all three `init` encodings in one JSON (ELF is illustrative, not real) |
+| [examples/fileinit/launch.py](examples/fileinit/launch.py) | 1 | Relative file `init` (`init="p.bin"`) on a `buffer` and a `SharedBuffer`; generated from a different cwd into a third directory, JSON still holds absolute paths to the files next to `launch.py` |
 
 Building generates each `launch.py`'s `launches.json` (+ `buf_init/`) via
 `gen_launches_json.py`, then runs [examples/common/check_launch.cc](examples/common/check_launch.cc)
 against it as a ctest -- parses the JSON with `parse_launches` and confirms
-every buffer's `init` file opens and fits its declared size. No RTL
+every buffer's `init` file opens and fits its declared size. The
+`kernel_launch_py_tests` ctest runs the Python unit tests in [tests/](tests/)
+(init path resolution, error messages, `buf_init/` pruning). No RTL
 simulation involved.
 
 ```sh

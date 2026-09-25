@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import struct
+import sys
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -10,8 +11,9 @@ from typing import Optional
 # When init is provided as bytes, the data is written here as a .bin file
 # and the JSON holds a relative path. The C++ loader memory-maps the file
 # and passes the pointer straight to the device memory interface -- no copy.
-# When init is a Path to an existing file, the JSON holds that path directly;
-# nothing is written to BUF_INIT_DIRNAME.
+# When init is a str/Path naming an existing file, the JSON holds that file's
+# absolute path (a relative init is resolved against the directory of the
+# launch.py that declared it); nothing is written to BUF_INIT_DIRNAME.
 BUF_INIT_DIRNAME = "buf_init"
 
 
@@ -68,19 +70,50 @@ class ScalarArg:
         return struct.unpack("<I", raw)[0]
 
 
-def _validate_buffer(label: str, size: int, init: Optional[bytes | str | Path]) -> None:
+def _caller_dir() -> Path:
+    """Directory of the source file that called into this module.
+
+    buffer()/SharedBuffer() run while launch.py executes, so the first stack
+    frame outside kernel_launch.py is the launch.py (or helper module) line
+    that declared the buffer. Falls back to cwd when that code has no real
+    file (REPL, exec of a string, ...).
+    """
+    here = Path(__file__).resolve()
+    frame = sys._getframe(1)
+    while frame is not None:
+        filename = frame.f_code.co_filename
+        if not filename.startswith("<") and Path(filename).resolve() != here:
+            return Path(filename).resolve().parent
+        frame = frame.f_back
+    return Path.cwd()
+
+
+def _resolve_init(init: Optional[bytes | str | Path]) -> Optional[bytes | Path]:
+    """Resolve a str/Path init to an absolute Path.
+
+    A relative path is taken relative to the directory of the source file that
+    called buffer()/SharedBuffer() (normally launch.py) -- not the process cwd
+    and not the launches JSON's directory. bytes/None pass through unchanged.
+    """
+    if isinstance(init, (str, Path)):
+        p = Path(init)
+        return (p if p.is_absolute() else _caller_dir() / p).resolve()
+    return init
+
+
+def _validate_buffer(label: str, size: int, init: Optional[bytes | Path]) -> None:
+    """init must already be resolved (see _resolve_init)."""
     if size % 4 != 0:
         raise ValueError(f"{label} size {size} must be 4-byte aligned")
     if isinstance(init, (bytes, bytearray)):
         if len(init) > size:
             raise ValueError(f"{label} init length {len(init)} exceeds size {size}")
-    elif isinstance(init, (str, Path)):
-        p = Path(init)
-        if not p.exists():
+    elif isinstance(init, Path):
+        if not init.is_file():
             raise ValueError(f"{label} init file not found: {init}")
-        file_size = p.stat().st_size
+        file_size = init.stat().st_size
         if file_size != size:
-            raise ValueError(f"{label} init file size {file_size} does not match buffer size {size}")
+            raise ValueError(f"{label} init file {init} size {file_size} does not match buffer size {size}")
 
 
 @dataclass
@@ -115,6 +148,7 @@ class SharedBuffer:
     _counter = 0
 
     def __init__(self, size: int, init: Optional[bytes | str | Path] = None):
+        init = _resolve_init(init)
         _validate_buffer("SharedBuffer", size, init)
         self.size = size
         self.init = init
@@ -146,6 +180,7 @@ def scalar(type_str: str, value, name: Optional[str] = None) -> ScalarArg:
 
 def buffer(size: int, dir: BufDir, init: Optional[bytes | str | Path] = None,
            name: Optional[str] = None) -> BufferArg:
+    init = _resolve_init(init)
     _validate_buffer("Buffer", size, init)
     return BufferArg(size=size, dir=dir, init=init, name=name)
 
@@ -156,6 +191,25 @@ def _write_init(buf_dir: Path, data: bytes, filename: str) -> str:
     return str(buf_dir / filename)
 
 
+def _buffer_init_filename(kernel_idx: int, arg_idx: int) -> str:
+    return f"k{kernel_idx}_a{arg_idx}.bin"
+
+
+def _shared_init_filename(shared_id: str) -> str:
+    return f"{shared_id}.bin"
+
+
+def _file_init_path(init: str | Path) -> str:
+    """JSON path for a file init. buffer()/SharedBuffer() already resolved it;
+    this only guards against a BufferArg built directly with a relative path,
+    which has no launch.py directory to resolve against."""
+    p = Path(init)
+    if not p.is_absolute():
+        raise ValueError(f"init file path must be absolute here (use buffer()/SharedBuffer() "
+                         f"to resolve relative paths): {init}")
+    return str(p)
+
+
 def _encode_scalar(a: ScalarArg) -> dict:
     return {"kind": "scalar", "type": a.type, "value": a.value, "name": a.name}
 
@@ -163,9 +217,9 @@ def _encode_scalar(a: ScalarArg) -> dict:
 def _encode_buffer(a: BufferArg, buf_dir: Path, kernel_idx: int, arg_idx: int) -> dict:
     init_path = None
     if isinstance(a.init, (bytes, bytearray)):
-        init_path = _write_init(buf_dir, a.init, f"k{kernel_idx}_a{arg_idx}.bin")
+        init_path = _write_init(buf_dir, a.init, _buffer_init_filename(kernel_idx, arg_idx))
     elif isinstance(a.init, (str, Path)):
-        init_path = str(a.init)
+        init_path = _file_init_path(a.init)
     return {
         "kind": "buffer",
         "size": a.size,
@@ -179,13 +233,13 @@ def _encode_shared_buffer_view(a: SharedBufferView, buf_dir: Path, shared_writte
     shared_id = a.shared._shared_id
     init_path = None
     if isinstance(a.shared.init, (bytes, bytearray)):
-        filename = f"{shared_id}.bin"
+        filename = _shared_init_filename(shared_id)
         if shared_id not in shared_written:
             _write_init(buf_dir, a.shared.init, filename)
             shared_written.add(shared_id)
         init_path = str(buf_dir / filename)
     elif isinstance(a.shared.init, (str, Path)):
-        init_path = str(a.shared.init)
+        init_path = _file_init_path(a.shared.init)
     return {
         "kind":      "shared_buffer",
         "shared_id": shared_id,
@@ -234,8 +288,10 @@ class KernelLaunch:
         """Encode this launch to a JSON-able dict.
 
         Buffer init handling depends on the init type:
-        - bytes: written as a .bin file under buf_dir; JSON holds the relative path.
-        - str/Path: JSON holds the path string directly; no file is written.
+        - bytes: written as a .bin file under buf_dir; JSON holds its path
+          (absolute when buf_dir is, as save_launches() ensures).
+        - str/Path: JSON holds the file's absolute path (resolved by
+          buffer()/SharedBuffer()); no file is written.
         shared_written tracks which SharedBuffer ids already had their .bin
         written, so a bytes-init shared buffer is written at most once across
         multiple kernels in one save_launches() call.
@@ -279,19 +335,38 @@ class KernelLaunch:
             f.write(self.to_json(buf_dir, kernel_idx=kernel_idx))
 
 
-def _referenced_bin_files(kernels: list, buf_dir: Path) -> set:
-    names = set()
-    for k in kernels:
-        for a in k["args"]:
-            init = a.get("init")
-            if init:
-                p = Path(init)
-                try:
-                    p.relative_to(buf_dir)
-                    names.add(p.name)
-                except ValueError:
-                    pass
-    return names
+def _referenced_bin_files(kernels: list) -> set:
+    """Resolved paths of every init file the encoded kernels reference --
+    generated bytes blobs and user-provided files alike -- so pruning never
+    removes a file the new JSON points at."""
+    return {Path(a["init"]).resolve() for k in kernels for a in k["args"] if a.get("init")}
+
+
+def _check_no_init_clobber(launches: list, buf_dir: Path) -> None:
+    """Refuse to write a bytes-init blob over a user-provided init file.
+
+    A str/Path init may legitimately live inside buf_dir; if its name matches
+    a generated blob name (k<i>_a<j>.bin / <shared_id>.bin) the save would
+    silently overwrite the user's data.
+    """
+    user_files = set()
+    generated = {}
+    for ki, launch in enumerate(launches):
+        for ai, a in enumerate(launch.args):
+            if isinstance(a, BufferArg):
+                init, name = a.init, _buffer_init_filename(ki, ai)
+            elif isinstance(a, SharedBufferView):
+                init, name = a.shared.init, _shared_init_filename(a.shared._shared_id)
+            else:
+                continue
+            if isinstance(init, (bytes, bytearray)):
+                generated[buf_dir / name] = f"kernel {ki} arg {ai}"
+            elif isinstance(init, (str, Path)):
+                user_files.add(Path(init).resolve())
+    for path, where in generated.items():
+        if path in user_files:
+            raise ValueError(f"bytes init for {where} would overwrite user init file {path}; "
+                             f"move or rename that file out of {buf_dir}")
 
 
 def save_launches(launches: list, path: str | Path, buf_dir: Optional[Path] = None) -> None:
@@ -302,7 +377,10 @@ def save_launches(launches: list, path: str | Path, buf_dir: Optional[Path] = No
     bytes init data is written as .bin files under buf_dir (default: BUF_INIT_DIRNAME
     sub-directory next to the JSON file). Pass buf_dir explicitly to place the
     buf_init/ directory elsewhere (e.g. next to launch.py). str/Path init is
-    referenced directly in the JSON; those files are not copied or managed here.
+    referenced in the JSON by absolute path (relative paths were resolved
+    against the declaring launch.py's directory by buffer()/SharedBuffer());
+    those files are not copied, and are never pruned even if they sit in
+    buf_dir. Only regular files directly in buf_dir are pruned.
 
     buf_dir is pruned only after the new kernels list is fully built, and
     the JSON is only overwritten after that -- so a failure partway through
@@ -313,15 +391,16 @@ def save_launches(launches: list, path: str | Path, buf_dir: Optional[Path] = No
     """
     if buf_dir is None:
         buf_dir = _buf_dir_for(path)
-    buf_dir = buf_dir.resolve()
+    buf_dir = Path(buf_dir).resolve()
+    _check_no_init_clobber(launches, buf_dir)
     shared_written = set()
     kernels = [launch.to_dict(buf_dir, kernel_idx=i, shared_written=shared_written)
                for i, launch in enumerate(launches)]
 
     if buf_dir.is_dir():
-        keep = _referenced_bin_files(kernels, buf_dir)
+        keep = _referenced_bin_files(kernels)
         for f in buf_dir.iterdir():
-            if f.name not in keep:
+            if f.is_file() and f.resolve() not in keep:
                 f.unlink()
 
     with open(path, "w") as f:
