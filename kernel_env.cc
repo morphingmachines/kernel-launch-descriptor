@@ -77,6 +77,8 @@ Launch_desc parse_launches(const char *json_path) {
                 ab.size = ja.at("size").get<uint32_t>();
                 ab.dir = parse_dir(ja.at("dir").get<std::string>());
                 ab.init_path = resolve_init_path(ja, json_dir);
+                if (ja.contains("name") && ja.at("name").is_string())
+                    ab.name = ja.at("name").get<std::string>();
                 kd.args.push_back(std::move(ab));
             } else if (kind == "shared_buffer") {
                 Arg_shared_buffer asb;

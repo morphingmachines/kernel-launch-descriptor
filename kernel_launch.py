@@ -275,6 +275,11 @@ class KernelLaunch:
            always void, like an OpenCL kernel.
     grid:  (n_x, n_y, n_ces): CR grid dimensions and CEs per CR.
     args:  list of ScalarArg, BufferArg, or SharedBufferView, in declaration order.
+    t_ops: optional total number of operations of the workload (a MAC counts as 2),
+           e.g. 2*M*N*K for a GEMM. Read by the rtltrace REDEFINE metrics plugin to
+           compute the compute-utilization efficiency; not sent to the host driver.
+    op_kind: kind of operation t_ops counts ("fp" or "int"); the metrics plugin
+           cross-checks "fp" against the retired FP instructions in the sim log.
 
     Buffer addresses and memory layout are assigned by the host driver consuming
     this descriptor; they are not part of the descriptor itself.
@@ -283,6 +288,8 @@ class KernelLaunch:
     entry: str
     grid:  tuple   # (n_x, n_y, n_ces)
     args:  list    # list[ScalarArg | BufferArg | SharedBufferView]
+    t_ops: Optional[int] = None
+    op_kind: str = "fp"
 
     def to_dict(self, buf_dir: Path, kernel_idx: int = 0, shared_written: Optional[set] = None) -> dict:
         """Encode this launch to a JSON-able dict.

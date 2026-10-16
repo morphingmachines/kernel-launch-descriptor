@@ -22,6 +22,7 @@ struct Arg_buffer {
     std::string init_path;  // absolute path to raw init bytes; empty = no host init.
                              // The host driver mmaps this file and writes it directly
                              // to the device backing.
+    std::string name;       // kernel param name from launch.py; empty if not given
 };
 
 struct Arg_shared_buffer {
